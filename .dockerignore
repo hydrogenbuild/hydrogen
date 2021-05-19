@@ -1,0 +1,12 @@
+
+# ignore .git and .cache folders
+.gitignore
+.git
+.cache
+
+# ignore all markdown files (md)
+*.md
+
+# ignore helium build scripting
+_build
+.buildkite

@@ -1,0 +1,38 @@
+steps:
+  - commands:
+      - ". $HOME/.asdf/asdf.sh"
+      - "asdf local erlang 22.1.8"
+      - "make compile"
+      - "make ci"
+    name: ":hammer: build"
+    key: "tests"
+    agents:
+      queue: "erlang"
+    artifact_paths:
+      - "artifacts/*"
+
+  - if: build.tag =~ /\_GA$$/
+    name: ":whale: AMD64 docker"
+    env:
+      REGISTRY_HOST: "quay.io"
+      REGISTRY_NAME: "miner"
+      IMAGE_FORMAT: "docker"
+      IMAGE_ARCH: "amd64"
+    agents:
+      queue: "erlang"
+    commands:
+      - "git fetch -t"
+      - ".buildkite/scripts/make_image.sh"
+
+  - if: build.tag =~ /\_GA$$/
+    name: ":whale: ARM64 docker"
+    agents:
+      queue: "arm64"
+    env:
+      REGISTRY_HOST: "quay.io"
+      REGISTRY_NAME: "miner"
+      IMAGE_FORMAT: "docker"
+      IMAGE_ARCH: "arm64"
+    commands:
+      - "git fetch -t"
+      - ".buildkite/scripts/make_image.sh"
