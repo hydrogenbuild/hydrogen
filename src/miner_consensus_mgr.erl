@@ -155,7 +155,7 @@ einfo() ->
             #{};
         Chain ->
             try
-                blockchain_election:election_info(blockchain:ledger(Chain), Chain)
+                blockchain_election:election_info(blockchain:ledger(Chain))
             catch _:_ ->
                     #{}
             end
@@ -287,7 +287,7 @@ handle_call({initial_dkg, GenesisTransactions, Addrs, N, Curve}, From, State0) -
             {noreply, DKGState#state{dkg_await=From}};
         {false, NonDKGState} ->
             lager:info("Not running DKG, From: ~p, WorkerAddr: ~p", [From, blockchain_swarm:pubkey_bin()]),
-            {reply, ok, NonDKGState}
+            {reply, not_in, NonDKGState}
     end;
 handle_call(consensus_pos, _From, State) ->
     Ledger = blockchain:ledger(State#state.chain),
@@ -556,7 +556,14 @@ handle_info({blockchain_event, {add_block, _Hash, _Sync, _Ledger}}, State) ->
             {noreply, State}
     end;
 handle_info({blockchain_event, {new_chain, NC}}, State) ->
+    %% check if we're in the consensus group
+    self() ! timeout,
     {noreply, State#state{chain = NC}};
+handle_info({blockchain_event, {integrate_genesis_block, _Hash}}, State = #state{chain=undefined}) ->
+    %% check if we're in the consensus group
+    self() ! timeout,
+    Chain = blockchain_worker:blockchain(),
+    {noreply, State#state{chain=Chain}};
 %% we had a chain to start with, so check restore state
 handle_info(timeout, State) ->
     try
@@ -566,6 +573,11 @@ handle_info(timeout, State) ->
         lager:info("try cold start consensus group at ~p", [StartHeight]),
 
         Chain = blockchain_worker:blockchain(),
+
+        case application:get_env(blockchain, follow_mode, false) of
+            true -> throw(follow_mode_enabled);
+            false -> ok
+        end,
         Ledger = blockchain:ledger(Chain),
         {ok, N} = blockchain:config(?num_consensus_members, Ledger),
         {ok, ElectionInterval} = blockchain:config(?election_interval, Ledger),
@@ -582,7 +594,7 @@ handle_info(timeout, State) ->
                 #{election_height := ElectionHeight,
                   start_height := EpochStart,
                   election_delay := ElectionDelay} =
-                    blockchain_election:election_info(Ledger, Chain),
+                    blockchain_election:election_info(Ledger),
                 NextElection = next_election(EpochStart, ElectionInterval),
                 RestoreState =
                     case lists:member(blockchain_swarm:pubkey_bin(), ConsensusAddrs) of
@@ -650,10 +662,11 @@ handle_info(timeout, State) ->
                         {noreply, RestoreState}
                 end
         end
-    catch _:_ ->
+    catch C:E:S ->
             %% unknown errors in here should not put the node into an
             %% unrepairable state.
-            lager:warning("crash during restore process, going to idle state"),
+            lager:warning("crash during restore process, going to idle state ~p:~p ~p",
+                          [C, E, S]),
             {noreply, State}
 
     end;
@@ -694,7 +707,7 @@ handle_info({'DOWN', OldRef, process, _GroupPid, _Reason},
     {ok, ConsensusAddrs} = blockchain_ledger_v1:consensus_members(Ledger),
     #{election_height := ElectionHeight,
       election_delay := ElectionDelay} =
-        blockchain_election:election_info(Ledger, Chain),
+        blockchain_election:election_info(Ledger),
     {ok, Block} = blockchain:head_block(Chain),
     Pos = miner_util:index_of(blockchain_swarm:pubkey_bin(), ConsensusAddrs),
     Name = consensus_group_name(ElectionHeight, ElectionDelay, ConsensusAddrs),
